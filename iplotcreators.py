@@ -1,11 +1,12 @@
 import numpy as np
 import pandas as pd
 
-from bokeh.models import GeoJSONDataSource, ColumnDataSource, HoverTool, LogColorMapper
+from bokeh.models import GeoJSONDataSource, ColumnDataSource, HoverTool, LogColorMapper, FuncTickFormatter
 from bokeh.models.widgets import RadioButtonGroup, Div, CheckboxGroup
 from bokeh.models.ranges import FactorRange
 from bokeh.layouts import widgetbox
 from bokeh.plotting import figure
+from bokeh.palettes import gray
 from ihelpers import aggregate_data_for_time_series, get_colors
 
 def _create_choropleth_map(source, width=600, height=1000):
@@ -22,21 +23,29 @@ def _create_choropleth_map(source, width=600, height=1000):
     """
     map_colors = ['#f2f2f2', '#fee5d9', '#fcbba1', '#fc9272', '#fb6a4a', '#de2d26']
     color_mapper = LogColorMapper(palette=map_colors)
-    map_tools = "pan,wheel_zoom,reset,hover,save"
-    
+    nonselection_color_mapper = LogColorMapper(palette=gray(6)[::-1])
+    tooltip_info = [("index", "$index"),
+                    ("(x,y)", "($x, $y)"),
+                    ("#incidents", "@incident_rate"),
+                    ("location id", "@location_id")]
+    map_tools = "pan,wheel_zoom,tap,hover,reset"
+
+
     p = figure(title="Spatial distribution of incidents in Amsterdam-Amstelland",
                tools=map_tools, x_axis_location=None, y_axis_location=None,
-               height=height, width=width)
-    
-    p.grid.grid_line_color = None
-    p.patches('xs', 'ys', source=source,
-              fill_color={'field': 'incident_rate', 'transform': color_mapper},
-              fill_alpha=0.7, line_color="black", line_width=0.3)
-    
-    return p
+               height=height, width=width, tooltips=tooltip_info)
 
-def _create_time_series(incidents, agg_field, pattern_field, group_field,
-                        incident_types, width=500, height=350):
+    p.grid.grid_line_color = None
+    patches = p.patches('xs', 'ys', source=source,
+                        fill_color={'field': 'incident_rate', 'transform': color_mapper},
+                        fill_alpha=0.7, line_color="black", line_width=0.3,
+                        nonselection_fill_color={'field': 'incident_rate',
+                                                 'transform': nonselection_color_mapper})
+
+    return p, patches
+
+def _create_time_series(dfincident, agg_by, pattern, group_by,
+                        types, width=500, height=350):
     """ Create a time series plot of the incident rate. 
 
     params
@@ -50,37 +59,52 @@ def _create_time_series(incidents, agg_field, pattern_field, group_field,
     ------
     tuple of (Bokeh figure, glyph) showing the incident rate over time.
     """
-    data, x_column, y_column = aggregate_data_for_time_series(incidents, 
-                                                             agg_field, 
-                                                             pattern_field,
-                                                             group_field,
-                                                             incident_types)
 
-    if group_field != "None":
-        colors, ngroups = get_colors(len(data))
-        data_source = ColumnDataSource({"xs": data[x_column].astype(str).tolist()[0:ngroups],
-                                        "ys": data[y_column].tolist()[0:ngroups],
-                                        "cs": colors,
-                                        "label": data["label"].tolist()[0:ngroups]})
+    def ticker():
+        """ Custom function for positioning ticks """
+        try:
+            if (int(tick)%10 == 0):
+                return tick
+            else:
+                return ""
+        except:
+            return tick
+
+    x, y, labels = aggregate_data_for_time_series(dfincident, agg_by, 
+                                                  pattern, group_by,
+                                                  types)
+
+    if group_by != "None":
+        colors, ngroups = get_colors(len(labels))
+        source = ColumnDataSource({"xs": x[0:ngroups],
+                                   "ys": y[0:ngroups],
+                                   "cs": colors,
+                                   "label": labels[0:ngroups]})
     else:
-        data_source = ColumnDataSource({"xs": [data[x_column].astype(str).tolist()],
-                                        "ys": [data[y_column].tolist()],
-                                        "cs": ["green"],
-                                        "label": ["avg incidents"]})
+        source = ColumnDataSource({"xs": [x],
+                                   "ys": [y],
+                                   "cs": ["green"],
+                                   "label": ["avg incidents count"]})
 
     # create plot
     timeseries_tools = "pan,wheel_zoom,reset,xbox_select,hover,save"
     p = figure(title="Time series of incident rate",
                tools=timeseries_tools, width=width, height=height,
-               x_range=FactorRange(factors=data[x_column].astype(str).unique()))
+               x_range=FactorRange(*x))
 
     glyph = p.multi_line(xs="xs", ys="ys", legend="label", line_color="cs", 
-                 source=data_source, line_width=3)
+                 source=source, line_width=3)
 
     # format legend
     p.legend.label_text_font_size = "7pt"
-    p.legend.background_fill_alpha = 0.4
+    p.legend.background_fill_alpha = 0.5
     p.legend.location = 'top_left'
+    # format ticks
+    p.xaxis.formatter = FuncTickFormatter.from_py_func(ticker)
+    p.xaxis.major_tick_line_width = 0.1
+    p.xaxis.major_label_text_font_size = "5pt"
+    p.xaxis.group_text_font_size = "6pt"
+    p.xaxis.major_tick_line_color = None
 
     return p, glyph
 

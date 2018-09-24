@@ -7,6 +7,7 @@ from bokeh.palettes import brewer
 
 def xy_to_lonlat(x, y):
     """ Transform x, y coordinates to longitude, latitude.
+
     params
     ------
     x: x coordinate
@@ -105,23 +106,51 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
     the aggregated values (incident rate).
     """
     
-    # initial columns to use for aggregation
-    pattern_mapping = {"Daily": "dim_datum_datum",
-                       "Weekly": "dim_year_and_weeknr",
-                       "Yearly": "dim_datum_jaar"}
+    def add_x_column(df, xcols):
+        """ Add a new column consisting of row-wise tuples of
+            values from the columns in xcol.
 
-    agg_mapping = {"Hour": "dim_tijd_uur",
-                   "Day": "dim_day_of_week",
-                   "Week": "dim_datum_week_nr",
-                   "Month": "dim_datum_maand_nr"}
+        params
+        ------
+        df: the DataFrame to add the columns to.
+        xcols: the column names of the columns that should 
+            make up the new column.
+
+        notes
+        -----
+        if len(xcols) == 1, then column 'x' is the same as the
+        column in xcols.
+
+        return
+        ------
+        DataFrame with added column named 'x', where the i'th value 
+        in df['x'] is a tuple of (df[i, xcols[0]], df[i, xcols[1]], ...).
+        """ 
+
+        if len(xcols)>1:
+            df['x'] = df.apply(lambda x: tuple(x[col] for col in xcols), axis=1)
+        else:
+            df['x'] = df[xcols[0]]
+
+        return df.drop(xcols, axis=1)
+
+    # initial columns to use for aggregation
+    pattern_mapping = {"Daily": ["dim_datum_datum"],
+                       "Weekly": ["dim_datum_jaar", "week_nr"],
+                       "Yearly": ["dim_datum_jaar"]}
+
+    agg_mapping = {"Hour": ["hour"],
+                   "Day": ["day_name"],
+                   "Week": ["week_nr"],
+                   "Month": ["month"]}
     
     group_mapping = {"None": None,
-                     "Type": "dim_incident_incident_type",
-                     "Day of Week": "dim_day_of_week",
-                     "Year": "dim_datum_jaar"}
+                     "Type": ["dim_incident_incident_type"],
+                     "Day of Week": ["day_name"],
+                     "Year": ["dim_datum_jaar"]}
 
-    pattern_col = pattern_mapping[pattern]
-    agg_col = agg_mapping[agg]
+    pattern_cols = pattern_mapping[pattern]
+    agg_cols = agg_mapping[agg]
     groupby_col = group_mapping[group]
 
     # filter types
@@ -129,88 +158,101 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
     
     # adjust columns if difference in unit is bigger than one
     if (agg == "Hour") & (pattern == "Weekly"):
-        agg_col = "dim_weekday_and_hour"
+        agg_cols = ["day_name", "hour"]
     elif (agg == "Hour") & (pattern == "Yearly"):
-        agg_col = "dim_month_daynr_hour"
+        agg_cols = ["month", "day_nr", "hour"]
     elif (agg == "Day") & (pattern == "Weekly"):
-        pattern_col = "dim_year_and_weeknr"
+        pattern_cols = ["dim_datum_jaar", "week_nr"]
     elif (agg == "Day") & (pattern == "Yearly"):
-        agg_col = "dim_month_and_daynr"
+        agg_cols = ["month", "day_nr"]
     else:
         pass
 
     # wrangle data
     if groupby_col:
         grouped = dfi_filtered \
-                    .groupby([agg_col, pattern_col, groupby_col]) \
+                    .groupby(list(np.unique(agg_cols + pattern_cols + groupby_col))) \
                     ["dim_incident_id"] \
                     .count() \
                     .reset_index()
 
         grouped = grouped \
-                    .groupby([agg_col, groupby_col]) \
+                    .groupby(agg_cols + groupby_col) \
                     ["dim_incident_id"] \
                     .mean() \
                     .reset_index()
 
-        count_col = "number of incidents"
-        grouped.rename(columns={"dim_incident_id" : count_col}, inplace=True)
-        data = grouped.groupby(groupby_col) \
-                .apply(lambda x: (x[agg_col].tolist(), x[count_col].tolist(), x.name)) \
+        grouped = add_x_column(grouped, agg_cols)
+        grouped = grouped \
+                .groupby(groupby_col) \
+                .apply(lambda x: (x["x"].tolist(), 
+                                  x["dim_incident_id"].tolist(),
+                                  x.name)) \
                 .apply(pd.Series)
-        data.columns = [agg_col, count_col, "label"]
-        data[agg_col] = data[agg_col].astype(str)
+        grouped.columns = ["x", "y", "labels"]
+        labels = grouped["labels"].tolist()
+
     else:
         grouped = dfi_filtered \
-                    .groupby([agg_col, pattern_col]) \
+                    .groupby(agg_cols + pattern_cols) \
                     ["dim_incident_id"] \
                     .count() \
                     .reset_index()
 
         grouped = grouped \
-                    .groupby([agg_col]) \
+                    .groupby(agg_cols) \
                     ["dim_incident_id"] \
                     .mean() \
                     .reset_index()
 
-        count_col = "number of incidents"
-        data = grouped.rename(columns={"dim_incident_id" : count_col})
-        data[agg_col] = data[agg_col].astype(str)
+        grouped = add_x_column(grouped, agg_cols)
+        grouped.rename(columns={"dim_incident_id": "y"}, inplace=True)
+        labels = []
 
-    return data, agg_col, count_col
+    x = grouped["x"].tolist()
+    y = grouped["y"].tolist()
 
-def preprocess_incident_datetimes(incidents):
+    return x, y, labels
+
+def load_and_preprocess_incidents(path):
     """ Perform preprocessing of datetimes of incidents for convenience
         of plotting.
 
     params
     ------
-    incidents: DataFrame containing the incident data.
+    path (str): Path to csv file with incident data.
 
     return
     ------
     DataFrame of incidents with added and adjusted columns
     """
 
-    # add leading zeros
-    incidents["dim_tijd_uur"] = incidents["dim_tijd_uur"].astype(str).str.zfill(2)
-    # map weekday names to numbers
-    incidents["dim_day_of_week"] = incidents["dim_datum_dag_naam_nl"].map(
-                                        {"Maandag" : 1, "Dinsdag" : 2, "Woensdag" : 3, 
-                                        "Donderdag" : 4, "Vrijdag" : 5, "Zaterdag" : 6,
-                                        "Zondag" : 7}
-                                        )
+    # load from given path
+    incidents = pd.read_csv(path, sep=";", decimal=".",
+        usecols=['dim_incident_id','dim_incident_incident_type', 'dim_datum_datum', 
+        'dim_datum_jaar', 'dim_datum_maand_nr', 'dim_datum_maand_dag_nr', 
+        'dim_datum_week_nr', 'dim_datum_dag_naam_nl','dim_prioriteit_prio', 'dim_tijd_uur',
+        'hub_vak_bk', 'hub_vak_id', 'st_x', 'st_y','cluster_naam', 'kazerne_groep'],
+        dtype={"dim_tijd_uur": int})
 
-    # create indicator for day-of-week + hour-of-day
-    incidents["dim_weekday_and_hour"] = "D" + incidents["dim_day_of_week"].astype(str) + \
-                                        " H" + incidents["dim_tijd_uur"].astype(str)
-    incidents["dim_month_and_daynr"] = "M" + incidents["dim_datum_maand_nr"].astype(str) + \
-                                       " D" + incidents["dim_datum_maand_dag_nr"].astype(str)
-    incidents["dim_month_daynr_hour"] = "M" + incidents["dim_datum_maand_nr"].astype(str) + \
-                                        " D" + incidents["dim_datum_maand_dag_nr"].astype(str) + \
-                                        " H"+ incidents["dim_tijd_uur"].astype(str)
-    incidents["dim_year_and_weeknr"] = incidents["dim_datum_jaar"].astype(str) + \
-                                        " W" + incidents["dim_datum_week_nr"].astype(str)
+    # add leading zeros to allow proper sorting
+    incidents["hour"] = incidents["dim_tijd_uur"].astype(str).str.zfill(2)
+    incidents["day_nr"] = incidents["dim_datum_maand_dag_nr"].astype(str).str.zfill(2)
+    incidents["week_nr"] = incidents["dim_datum_week_nr"].astype(str).str.zfill(2)
+    
+    # map weekday names to shorts and order them
+    incidents["day_name"] = incidents["dim_datum_dag_naam_nl"].map(
+        {"Maandag" : "Mon", "Dinsdag" : "Tue", "Woensdag" : "Wed",
+        "Donderdag" : "Thu", "Vrijdag" : "Fri", "Zaterdag" : "Sat", "Zondag" : "Sun"})
+    incidents["day_name"] = pd.Categorical(incidents["day_name"], ordered=True,
+        categories=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+    # same for months
+    incidents["month"] = incidents["dim_datum_maand_nr"].astype(int).map(
+        {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"})
+    incidents["month"] = pd.Categorical(incidents["month"], ordered=True,
+        categories=["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
 
     return incidents
 
@@ -226,7 +268,10 @@ def get_colors(n):
     ------
     list of n Hex color codes.
     """
-    cap = np.min([11, n])
-    # only 12 colors available in the Spectral palette
-    # (besides, more than that would be unreadable in the plot anyways.)
-    return brewer["Spectral"][cap], cap
+    if n < 3:
+        # minimum 3 colors in the dictionary
+        return brewer["Spectral"][3][0:n], n
+    else:
+        # only 11 colors available in the Spectral palette
+        cap = np.min([11, n])
+        return brewer["Spectral"][cap], cap
