@@ -8,7 +8,7 @@ import geopandas as gpd
 from bokeh.io import output_file, show
 from bokeh.models import GeoJSONDataSource, ColumnDataSource, HoverTool, LogColorMapper
 from bokeh.models.ranges import FactorRange
-from bokeh.models.widgets import Div
+from bokeh.models.widgets import Div, MultiSelect, Button
 from bokeh.plotting import figure, curdoc
 from bokeh.palettes import Reds6 as palette
 from bokeh.layouts import layout, column, row, widgetbox, gridplot
@@ -48,23 +48,24 @@ ts_figure, ts_glyph = _create_time_series(\
 
 # create widgets
 pattern_select = _create_radio_button_group(["Daily", "Weekly", "Yearly"])
-#pattern_cols = ["dim_datum_datum", "dim_datum_week_nr", "dim_datum_jaar"]
-
 aggregate_select = _create_radio_button_group(["Hour", "Day", "Week", "Month"])
-# aggregate_cols = ["dim_tijd_uur", "dim_day_of_week",
-#                   "dim_datum_week_nr", "dim_datum_maand_nr"]
-
-groupby_select = _create_radio_button_group(["Type", "Day of Week", "Year", "None"])
-# groupby_cols = ["dim_incident_incident_type", "dim_day_of_week", "dim_datum_jaar", None]
-
+groupby_select = _create_radio_button_group(["None", "Type", "Day of Week", "Year"])
 incident_types = dfincident["dim_incident_incident_type"].astype(str).unique()
-type_filter = _create_type_filter(incident_types)
+#type_filter = _create_type_filter(incident_types)
+type_filter = MultiSelect(title="Incident Types:", value=list(incident_types),
+                          options=[(t, t) for t in incident_types],
+                          size=10)
+select_all_types_button = Button(label="Select all", button_type="primary",
+                                 width=150)
 
 # headers
+status_available_style = {"font-size": "8pt", "color": "green"}
+status_unavailable_style = {"font-size": "8pt", "color": "red"}
+status = Div(text="""<i>Status: at your service</i>""", style={"font-size": "8pt", "color": "green"})
 pattern_head = Div(text="Pattern:")
 agg_head = Div(text="Aggregate by:")
 groupby_head = Div(text="Group by:")
-type_head = Div(text="Select incident types:")
+#type_head = Div(text="Select incident types:")
 
 ## add callbacks
 def update_time_series(filter_, attr, old, new):
@@ -72,6 +73,8 @@ def update_time_series(filter_, attr, old, new):
 
     params
     ------
+    filter_: identifier for the filter that has been changed.
+             One of {'agg', 'pattern', 'group', 'types'}.
     attr: the attribute that changed.
     old: old value of 'attr'.
     new: new value of 'attr'.
@@ -81,63 +84,64 @@ def update_time_series(filter_, attr, old, new):
     The callback input (attr, old, new) is not used in order 
     to make the function callable when different filters change.
     """
-
-    def feasible_selection(agg, pat, group):
-        """ Check if current selection is feasible """
-
-        if (np.isin(agg, feasible_combos[pat]["agg"])) & \
-           (np.isin(group, feasible_combos[pat]["group"])):
-           return True
-        else:
-            return False
-
+    status.style = status_unavailable_style
+    status.text = "<i>Status: calculating...</i>"
+    
     agg_by = aggregate_select.labels[aggregate_select.active]
     pattern = pattern_select.labels[pattern_select.active]
     group_by = groupby_select.labels[groupby_select.active]
-    types = incident_types[type_filter.active]
+    types = type_filter.value
 
-    if not feasible_selection(agg_by, pattern, group_by):
-        
-        # ignore or adjust requested update
+    # check for feasibility and possibly cancel update
+    perform_update = True
+    if not np.isin(agg_by, feasible_combos[pattern]["agg"]):
         if filter_ == "agg":
             aggregate_select.active = old
-        elif filter_ == "pattern":
-            # adjust the aggregation and groupby
-            # to make sure they're feasible
+            perform_update = False
+        else:
             aggregate_select.active = \
                 aggregate_select.labels.index(feasible_combos[pattern]["agg"][0])
-            groupby_select.active = 3
-        elif filter_ == "group":
+    if not np.isin(group_by, feasible_combos[pattern]["group"]):
+        if filter_ == "group":
             groupby_select.active = old
+            perform_update = False
+        else:
+            groupby_select.active = 3 # No groupby
 
-    
-    # filter on location if map selection is made
-    if len(geo_source.selected.indices)>0:
-        loc_indices = geo_source.selected.indices
-        loc_ids = [locdata.iloc[int(idx)]["location_id"] for idx in loc_indices]
-        incidents = dfincident[np.isin(dfincident["hub_vak_bk"], loc_ids)]
+    if perform_update:
+        # filter on location if map selection is made
+        if len(geo_source.selected.indices)>0:
+            loc_indices = geo_source.selected.indices
+            loc_ids = [locdata.iloc[int(idx)]["location_id"] for idx in loc_indices]
+            #incidents = dfincident[np.isin(dfincident["hub_vak_bk"], loc_ids)]
+        else:
+            loc_ids=None
+            #incidents = dfincident
+
+        # aggregate and prepare data
+        x, y, labels = aggregate_data_for_time_series(dfincident, agg_by, 
+                                                      pattern, group_by,
+                                                      types, loc_ids)
+
+        if group_by != "None":
+            colors, ngroups = get_colors(len(labels))
+            ts_glyph.data_source.data = {"xs": x[0:ngroups],
+                                         "ys": y[0:ngroups],
+                                         "cs": colors,
+                                         "label": labels[0:ngroups]}
+            ts_figure.x_range.factors = x[0]
+
+        else:
+            ts_glyph.data_source.data = {"xs": [x],
+                                         "ys": [y],
+                                         "cs": ["green"],
+                                         "label": ["avg incident count"]}
+            ts_figure.x_range.factors = x
     else:
-        incidents = dfincident
+        print("Update cancelled due to impossible filter combination.")
 
-    # aggregate and prepare data
-    x, y, labels = aggregate_data_for_time_series(incidents, agg_by, 
-                                                  pattern, group_by,
-                                                  types)
-
-    if group_by != "None":
-        colors, ngroups = get_colors(len(labels))
-        ts_glyph.data_source.data = {"xs": x[0:ngroups],
-                                     "ys": y[0:ngroups],
-                                     "cs": colors,
-                                     "label": labels[0:ngroups]}
-        ts_figure.x_range.factors = x[0]
-
-    else:
-        ts_glyph.data_source.data = {"xs": [x],
-                                     "ys": [y],
-                                     "cs": ["green"],
-                                     "label": ["avg incident count"]}
-        ts_figure.x_range.factors = x
+    status.style = status_available_style
+    status.text = "<i>Status: at your service</i>"
 
 # wrappers for update to include the changed filter
 def callback_pattern_selection(attr, old, new):
@@ -150,25 +154,29 @@ def callback_groupby_selection(attr, old, new):
     update_time_series("group", attr, old, new)
 
 def callback_type_filter(attr, old, new):
+    print("new value types: {}"
+          .format(new))
     update_time_series("types", attr, old, new)
 
 def callback_map_selection(attr, old, new):
-    update_time_series("map", attr, old, new)
+    update_time_series("map", attr, old, new)    
 
-    
+def callback_select_all_types():
+    type_filter.value = list(incident_types)
 
 pattern_select.on_change('active', callback_pattern_selection)
 aggregate_select.on_change('active', callback_aggregation_selection)
 groupby_select.on_change('active', callback_groupby_selection)
-type_filter.on_change('active', callback_type_filter)
+type_filter.on_change('value', callback_type_filter)
 geo_source.on_change('selected', callback_map_selection)
+select_all_types_button.on_click(callback_select_all_types)
 ## end callbacks
 
 # create layout of application
-radios_widgetbox = widgetbox(children=[pattern_head, pattern_select, 
-                          agg_head, aggregate_select,
-                          groupby_head, groupby_select])
-type_widgetbox = widgetbox(children=[type_head, type_filter])
+radios_widgetbox = widgetbox(children=[status, pattern_head, pattern_select, 
+                                       agg_head, aggregate_select,
+                                       groupby_head, groupby_select])
+type_widgetbox = column(children=[type_filter, select_all_types_button])
 widgets = row(children=[type_widgetbox, radios_widgetbox])
 main_left = column(children=[map_figure], width=LEFT_COLUMN_WIDTH, 
                    height=COLUMN_HEIGHT)
@@ -176,4 +184,3 @@ main_right = column(children=[ts_figure, widgets],
                     width=RIGHT_COLUMN_WIDTH, height=COLUMN_HEIGHT)
 root = layout([[main_left, main_right]])
 curdoc().add_root(root)
-

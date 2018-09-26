@@ -62,17 +62,14 @@ def _create_time_series(dfincident, agg_by, pattern, group_by,
 
     def ticker():
         """ Custom function for positioning ticks """
-        try:
-            if (int(tick)%10 == 0):
-                return tick
-            else:
-                return ""
-        except:
+        if (int(tick)%10 == 0) | (len(tick)>2):
             return tick
+        else:
+            return ""
 
     x, y, labels = aggregate_data_for_time_series(dfincident, agg_by, 
                                                   pattern, group_by,
-                                                  types)
+                                                  types, None)
 
     if group_by != "None":
         colors, ngroups = get_colors(len(labels))

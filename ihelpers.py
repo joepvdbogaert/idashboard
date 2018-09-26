@@ -4,6 +4,7 @@ import geopandas as gpd
 from pyproj import Proj, transform
 from shapely.geometry import Polygon
 from bokeh.palettes import brewer
+from itertools import product
 
 def xy_to_lonlat(x, y):
     """ Transform x, y coordinates to longitude, latitude.
@@ -88,7 +89,7 @@ def preprocess_incidents_for_geoplot(incidents, vakken):
     return vakdata
 
 def aggregate_data_for_time_series(dfi, agg, pattern, 
-                                   group, types):
+                                   group, types, locations):
     """ Aggregate incident data to show the desired pattern.
 
     Params
@@ -153,8 +154,10 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
     agg_cols = agg_mapping[agg]
     groupby_col = group_mapping[group]
 
-    # filter types
+    # filter on types and locations
     dfi_filtered = dfi[np.isin(dfi["dim_incident_incident_type"],types)]
+    if locations is not None:
+        dfi_filtered = dfi_filtered[np.isin(dfi_filtered["hub_vak_bk"], locations)]
     
     # adjust columns if difference in unit is bigger than one
     if (agg == "Hour") & (pattern == "Weekly"):
@@ -170,33 +173,72 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
 
     # wrangle data
     if groupby_col:
+        if np.isin(groupby_col, agg_cols+pattern_cols):
+            new_index = dfi.groupby(pattern_cols+agg_cols)["dim_incident_id"].count().index
+            cols_first_grouping = new_index.names
+        else:
+            new_index = create_complete_index(dfi, 
+                              pattern_cols+agg_cols,
+                              "dim_incident_id",
+                              list(np.unique(dfi_filtered[groupby_col])))
+            cols_first_grouping = pattern_cols+agg_cols+groupby_col
+            new_index.names = cols_first_grouping
+
+        """
+        dfi.groupby(list(np.unique(agg_cols + pattern_cols + groupby_col))) \
+                        ["dim_incident_id"] \
+                        .count()\
+                        .index
+        """
+        #print(cols_first_grouping)
+        #print(new_index.names)
+        #print(list(new_index[0:20]))
         grouped = dfi_filtered \
-                    .groupby(list(np.unique(agg_cols + pattern_cols + groupby_col))) \
+                    .groupby(cols_first_grouping) \
                     ["dim_incident_id"] \
                     .count() \
+                    .reindex(new_index, fill_value=0) \
                     .reset_index()
 
+        #print("first grouping complete")
+        #print("group over: {}".format(agg_cols + groupby_col))
         grouped = grouped \
                     .groupby(agg_cols + groupby_col) \
                     ["dim_incident_id"] \
                     .mean() \
                     .reset_index()
 
+
+        print("agg_cols: {}".format(agg_cols))
+        print(grouped.head())
+        #print("second grouping complete")
+        grouped = order_categoricals(grouped)
         grouped = add_x_column(grouped, agg_cols)
+        #print("x column added")
+        #print(grouped.head())
         grouped = grouped \
-                .groupby(groupby_col) \
-                .apply(lambda x: (x["x"].tolist(), 
-                                  x["dim_incident_id"].tolist(),
-                                  x.name)) \
-                .apply(pd.Series)
+                    .groupby(groupby_col) \
+                    .apply(lambda x: (x["x"].tolist(), 
+                                      x["dim_incident_id"].tolist(),
+                                      x.name)) \
+                    .apply(pd.Series)
+        #print("third one done")
         grouped.columns = ["x", "y", "labels"]
+        #print(grouped.head(30))
         labels = grouped["labels"].tolist()
 
     else:
+        new_index = dfi_filtered \
+                        .groupby(agg_cols + pattern_cols) \
+                        ["dim_incident_id"] \
+                        .count() \
+                        .index
+        #print("no grouping milestone 1")
         grouped = dfi_filtered \
                     .groupby(agg_cols + pattern_cols) \
                     ["dim_incident_id"] \
                     .count() \
+                    .reindex(new_index, fill_value=0) \
                     .reset_index()
 
         grouped = grouped \
@@ -205,8 +247,11 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
                     .mean() \
                     .reset_index()
 
+        grouped = order_categoricals(grouped)
         grouped = add_x_column(grouped, agg_cols)
+
         grouped.rename(columns={"dim_incident_id": "y"}, inplace=True)
+
         labels = []
 
     x = grouped["x"].tolist()
@@ -239,7 +284,7 @@ def load_and_preprocess_incidents(path):
     incidents["hour"] = incidents["dim_tijd_uur"].astype(str).str.zfill(2)
     incidents["day_nr"] = incidents["dim_datum_maand_dag_nr"].astype(str).str.zfill(2)
     incidents["week_nr"] = incidents["dim_datum_week_nr"].astype(str).str.zfill(2)
-    
+
     # map weekday names to shorts and order them
     incidents["day_name"] = incidents["dim_datum_dag_naam_nl"].map(
         {"Maandag" : "Mon", "Dinsdag" : "Tue", "Woensdag" : "Wed",
@@ -257,7 +302,7 @@ def load_and_preprocess_incidents(path):
     return incidents
 
 def get_colors(n):
-    """ Get list of n distinct color codes.
+    """ Get list of $n$ distinct color codes.
     
     params
     ------
@@ -275,3 +320,50 @@ def get_colors(n):
         # only 11 colors available in the Spectral palette
         cap = np.min([11, n])
         return brewer["Spectral"][cap], cap
+
+def create_complete_index(data, cols, count_col, factors):
+    """ Create MultiIndex from the product of every observed 
+        combination of data[cols] with factors.
+
+    params
+    ------
+    data: DataFrame to create the index from.
+    cols: list of column names to include in the index.
+    count_col: another column that can be used in the groupby.
+    factors: a list of factors to add to the index.
+
+    return
+    ------
+    a pd.MultiIndex object with all combinations of the *observed*
+    tuples (cols[1], cols[2], ...) and all factors.
+    """
+    new_index = data.groupby(cols)[count_col].count().index
+    return pd.MultiIndex.from_tuples(
+        [tuple(unit for unit in time)+(type_,)
+         for time, type_ in product(*[list(new_index), factors])]
+    )
+
+def order_categoricals(df):
+    """ Create categoricals and order them logically for 
+        day and month names.
+
+    params
+    ------
+    df: the DataFrame of which columns should be adjusted.
+
+    return
+    ------
+    a DataFrame similar to df, but where day and month names
+    are ordered categoricals and the data is sorted accordingly.
+    """ 
+    for col in df.columns:
+        if col == "day_name":
+            df[col] = pd.Categorical(df[col], ordered=True,
+                categories=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        elif col == "month":
+            df[col] = pd.Categorical(df[col], ordered=True,
+                categories=["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+                            "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
+        else:
+            pass # do nothing
+    return df.sort_values(by=list(df.columns))
