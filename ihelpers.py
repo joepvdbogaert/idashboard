@@ -40,7 +40,86 @@ def convert_polygons_from_xy_to_lonlat(polygons):
     return polygons.apply(lambda poly: \
         Polygon([xy_to_lonlat(x, y) for x, y in list(poly[0].exterior.coords)]))
 
-def preprocess_incidents_for_geoplot(incidents, vakken):
+def load_and_preprocess_geodata(path):
+    """ Loads geojson and performs simple preprocessing steps.
+
+    params
+    ------
+    path: the path to the file to load.
+
+    notes
+    -----
+    Performs the following steps:
+        1. convert polygon id to integer
+        2. convert polygons from x,y to lon,lat for consistency
+
+    return
+    ------ 
+    A GeoPandas DataFrame with the loaded and preprocessed data.
+    """
+    gdflocations = gpd.read_file(path)
+    gdflocations["vak"] = gdflocations["vak"].astype(int)
+    gdflocations["geometry_lonlat"] = convert_polygons_from_xy_to_lonlat(gdflocations["geometry"])
+    return gdflocations
+
+
+def load_and_preprocess_incidents(path):
+    """ Perform preprocessing of datetimes of incidents for convenience
+        of plotting.
+
+    params
+    ------
+    path (str): Path to csv file with incident data.
+
+    notes
+    -----
+    Performs the following steps:
+        1. remove incidents without a polygon (vak) ID
+        2. remove incidents outsides the FDAA's service area 
+           (since these are not in the geo data)
+        3. create ordered pd.Categorical columns for day and 
+           month names.
+
+    return
+    ------
+    DataFrame of incidents with added and adjusted columns
+    """
+
+    # load from given path
+    incidents = pd.read_csv(path, sep=";", decimal=".",
+        usecols=['dim_incident_id','dim_incident_incident_type', 'dim_datum_datum', 
+        'dim_datum_jaar', 'dim_datum_maand_nr', 'dim_datum_maand_dag_nr', 
+        'dim_datum_week_nr', 'dim_datum_dag_naam_nl','dim_prioriteit_prio', 'dim_tijd_uur',
+        'hub_vak_bk', 'hub_vak_id', 'st_x', 'st_y','cluster_naam', 'kazerne_groep'],
+        dtype={"dim_tijd_uur": int})
+
+    incidents = incidents[~incidents["hub_vak_bk"].isnull()].copy()
+    incidents["hub_vak_bk"] = incidents["hub_vak_bk"].astype(int)
+    incidents = incidents[incidents["hub_vak_bk"].astype(str).str[0:2]=="13"]
+
+    # add leading zeros to allow proper sorting
+    incidents["hour"] = incidents["dim_tijd_uur"].astype(str).str.zfill(2)
+    incidents["day_nr"] = incidents["dim_datum_maand_dag_nr"].astype(str).str.zfill(2)
+    incidents["week_nr"] = incidents["dim_datum_week_nr"].astype(str).str.zfill(2)
+
+    # map weekday names to shorts and order them
+    incidents["day_name"] = incidents["dim_datum_dag_naam_nl"].map(
+        {"Maandag" : "Mon", "Dinsdag" : "Tue", "Woensdag" : "Wed",
+        "Donderdag" : "Thu", "Vrijdag" : "Fri", "Zaterdag" : "Sat", "Zondag" : "Sun"})
+    incidents["day_name"] = pd.Categorical(incidents["day_name"], ordered=True,
+        categories=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+    # same for months
+    incidents["month"] = incidents["dim_datum_maand_nr"].astype(int).map(
+        {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"})
+    incidents["month"] = pd.Categorical(incidents["month"], ordered=True,
+        categories=["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
+
+    return incidents
+
+
+def prepare_data_for_geoplot(incidents, vakken):
     """ Preprocess the incident data and geodata for plotting.
 
     params
@@ -52,41 +131,31 @@ def preprocess_incidents_for_geoplot(incidents, vakken):
     notes
     -----
     Performs the following steps:
-        1. remove incidents without a polygon (vak) ID
-        2. convert polygon id to integer
-        3. remove incidents outsides the FDAA's service area 
-           (since these are not in the geo data)
-        4. convert polygons from x,y to lon,lat for consistency
-        5. group the incidents per polygon and count incidents as 
+        1. group the incidents per polygon and count incidents as 
            initial value to plot
-        6. merge the polygons to the grouped incident data
-        7. remove records with missing polygons to be sure
+        3. merge the polygons to the grouped incident data
+        4. remove records with missing polygons to be sure
 
     return
     ------
     GeoDataFrame with columns ["location_id", "incident_rate", "geometry"]
     """
 
-    # step 1 to 4
-    incidents = incidents[~incidents["hub_vak_bk"].isnull()].copy()
-    incidents["hub_vak_bk"] = incidents["hub_vak_bk"].astype(int)
-    vakken["vak"] = vakken["vak"].astype(int)
-    incidents = incidents[incidents["hub_vak_bk"].astype(str).str[0:2]=="13"]
-    vakken["geometry_lonlat"] = convert_polygons_from_xy_to_lonlat(vakken["geometry"])
-
-    # 5 and 6: aggregate and merge
+    # 1 and 2: aggregate and merge
     grouped = incidents.groupby(["hub_vak_bk"])["dim_incident_id"].count().reset_index()
     vakdata = grouped.merge(vakken, left_on="hub_vak_bk", right_on="vak", how="left")
 
-    # 7. to be sure nothing goes wrong later
+    # 3. to be sure nothing goes wrong later
     vakdata = vakdata[~vakdata["geometry_lonlat"].isnull()].reset_index(drop=True)
 
-    # create and returnGeoDataFrame with the relevant data and set the geometry
+    # create and return GeoDataFrame with the relevant data and set the geometry
     vakdata = gpd.GeoDataFrame(vakdata[["hub_vak_bk", "dim_incident_id", "geometry_lonlat"]])
     vakdata.columns = ["location_id", "incident_rate", "geometry"]
     vakdata.set_geometry("geometry", inplace=True)
+    vakdata["incident_rate"] = vakdata["incident_rate"].fillna(0)
 
     return vakdata
+
 
 def aggregate_data_for_time_series(dfi, agg, pattern, 
                                    group, types, locations):
@@ -184,15 +253,6 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
             cols_first_grouping = pattern_cols+agg_cols+groupby_col
             new_index.names = cols_first_grouping
 
-        """
-        dfi.groupby(list(np.unique(agg_cols + pattern_cols + groupby_col))) \
-                        ["dim_incident_id"] \
-                        .count()\
-                        .index
-        """
-        #print(cols_first_grouping)
-        #print(new_index.names)
-        #print(list(new_index[0:20]))
         grouped = dfi_filtered \
                     .groupby(cols_first_grouping) \
                     ["dim_incident_id"] \
@@ -200,42 +260,35 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
                     .reindex(new_index, fill_value=0) \
                     .reset_index()
 
-        #print("first grouping complete")
-        #print("group over: {}".format(agg_cols + groupby_col))
         grouped = grouped \
                     .groupby(agg_cols + groupby_col) \
                     ["dim_incident_id"] \
                     .mean() \
                     .reset_index()
 
-
-        print("agg_cols: {}".format(agg_cols))
-        print(grouped.head())
-        #print("second grouping complete")
         grouped = order_categoricals(grouped)
         grouped = add_x_column(grouped, agg_cols)
-        #print("x column added")
-        #print(grouped.head())
+
         grouped = grouped \
                     .groupby(groupby_col) \
                     .apply(lambda x: (x["x"].tolist(), 
                                       x["dim_incident_id"].tolist(),
                                       x.name)) \
                     .apply(pd.Series)
-        #print("third one done")
+
         grouped.columns = ["x", "y", "labels"]
-        #print(grouped.head(30))
+
         labels = grouped["labels"].tolist()
 
     else:
-        new_index = dfi_filtered \
-                        .groupby(agg_cols + pattern_cols) \
+        new_index = dfi \
+                        .groupby(pattern_cols+agg_cols) \
                         ["dim_incident_id"] \
                         .count() \
                         .index
-        #print("no grouping milestone 1")
+
         grouped = dfi_filtered \
-                    .groupby(agg_cols + pattern_cols) \
+                    .groupby(pattern_cols+agg_cols) \
                     ["dim_incident_id"] \
                     .count() \
                     .reindex(new_index, fill_value=0) \
@@ -258,48 +311,6 @@ def aggregate_data_for_time_series(dfi, agg, pattern,
     y = grouped["y"].tolist()
 
     return x, y, labels
-
-def load_and_preprocess_incidents(path):
-    """ Perform preprocessing of datetimes of incidents for convenience
-        of plotting.
-
-    params
-    ------
-    path (str): Path to csv file with incident data.
-
-    return
-    ------
-    DataFrame of incidents with added and adjusted columns
-    """
-
-    # load from given path
-    incidents = pd.read_csv(path, sep=";", decimal=".",
-        usecols=['dim_incident_id','dim_incident_incident_type', 'dim_datum_datum', 
-        'dim_datum_jaar', 'dim_datum_maand_nr', 'dim_datum_maand_dag_nr', 
-        'dim_datum_week_nr', 'dim_datum_dag_naam_nl','dim_prioriteit_prio', 'dim_tijd_uur',
-        'hub_vak_bk', 'hub_vak_id', 'st_x', 'st_y','cluster_naam', 'kazerne_groep'],
-        dtype={"dim_tijd_uur": int})
-
-    # add leading zeros to allow proper sorting
-    incidents["hour"] = incidents["dim_tijd_uur"].astype(str).str.zfill(2)
-    incidents["day_nr"] = incidents["dim_datum_maand_dag_nr"].astype(str).str.zfill(2)
-    incidents["week_nr"] = incidents["dim_datum_week_nr"].astype(str).str.zfill(2)
-
-    # map weekday names to shorts and order them
-    incidents["day_name"] = incidents["dim_datum_dag_naam_nl"].map(
-        {"Maandag" : "Mon", "Dinsdag" : "Tue", "Woensdag" : "Wed",
-        "Donderdag" : "Thu", "Vrijdag" : "Fri", "Zaterdag" : "Sat", "Zondag" : "Sun"})
-    incidents["day_name"] = pd.Categorical(incidents["day_name"], ordered=True,
-        categories=["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
-    # same for months
-    incidents["month"] = incidents["dim_datum_maand_nr"].astype(int).map(
-        {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
-         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"})
-    incidents["month"] = pd.Categorical(incidents["month"], ordered=True,
-        categories=["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])
-
-    return incidents
 
 def get_colors(n):
     """ Get list of $n$ distinct color codes.
@@ -367,3 +378,30 @@ def order_categoricals(df):
         else:
             pass # do nothing
     return df.sort_values(by=list(df.columns))
+
+
+def filter_on_slider_value(data, time_unit, value):
+    """ Filter the data on time. Used to process changes
+        in the slider value.
+
+    params
+    ------
+    data: the pd.DataFrame to filter.
+    time_unit: the time unit (column) to perform filtering on.
+    value: the value of the time_unit that should be kept.
+
+    return
+    ------
+    the filtered DataFrame.
+    """
+    if time_unit=="hour":
+        return data[data["hour"]==str(value).zfill(2)]
+    elif time_unit=="day":
+        mapping = {1:"Mon", 2:"Tue", 3:"Wed", 4:"Thu", 5:"Fri", 6:"Sat", 7:"Sun"}
+        return data[data["day_name"]==mapping[value]]
+    elif time_unit=="week":
+        return data[data["week_nr"]==str(value).zfill(2)]
+    elif time_unit=="month":
+        return data[data["month"]==str(value).zfill(2)]
+    else:
+        ValueError("Invalid time_unit: must be one of {'hour', 'day', 'week', 'month'}")
