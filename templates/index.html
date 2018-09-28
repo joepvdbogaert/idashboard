@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    {{ bokeh_css }}
+    {{ bokeh_js }}
+    <link rel="stylesheet" href="idashboard/static/css/styles.css"/>
+  </head>
+  <body>
+    <div class="header">
+      <img class="logo", src="idashboard/static/images/brandweer-logo.svg"></img>
+      <h1 id="title">Incident Exploration</h1>
+    </div>
+    {{ plot_div|indent(8) }}
+    {{ plot_script|indent(8) }}
+  </body>
+</html>

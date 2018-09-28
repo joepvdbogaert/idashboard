@@ -70,14 +70,6 @@ type_filter = MultiSelect(title="Incident Types:", value=list(incident_types),
 select_all_types_button = Button(label="Select all", button_type="primary",
                                  width=150)
 
-# headers
-status_available_style = {"font-size": "8pt", "color": "green"}
-status_unavailable_style = {"font-size": "8pt", "color": "red"}
-status = Div(text="""<i>Status: at your service</i>""", style={"font-size": "8pt", "color": "green"})
-pattern_head = Div(text="Pattern:")
-agg_head = Div(text="Aggregate by:")
-groupby_head = Div(text="Group by:")
-
 ## add callbacks
 def update_time_series(filter_, attr, old, new):
     """ Updates the time series plot when filters have changed.
@@ -260,18 +252,31 @@ geo_source.on_change('selected', callback_map_selection)
 select_all_types_button.on_click(callback_select_all_types)
 ## end callbacks
 
+# headers
+map_head = Div(text="<h2>Spatial distribution of incidents</h2>", css_classes=["plot-head"],
+               width=LEFT_COLUMN_WIDTH)
+ts_head = Div(text="<h2>Time distribution of incidents</h2>", css_classes=["plot-head"],
+              width=RIGHT_COLUMN_WIDTH)
+status_available_style = {"font-size": "8pt", "color": "green"}
+status_unavailable_style = {"font-size": "8pt", "color": "red"}
+status = Div(text="""<i>Status: at your service</i>""", style={"font-size": "8pt", "color": "green"})
+pattern_head = Div(text="Pattern:", css_classes=["filter-head"])
+agg_head = Div(text="Aggregate by:", css_classes=["filter-head"])
+groupby_head = Div(text="Group by:", css_classes=["filter-head"])
+
 # create layout of application
 radios_widgetbox = widgetbox(children=[status, pattern_head, pattern_select, 
                                        agg_head, aggregate_select,
                                        groupby_head, groupby_select])
 type_widgetbox = column(children=[type_filter, select_all_types_button])
 
-widgets = column(children=[row(children=[time_slider, play_button, slider_active_toggle]),
+widgets = column(children=[row(children=[time_slider], width=RIGHT_COLUMN_WIDTH),
+                           row(children=[play_button, slider_active_toggle], width=RIGHT_COLUMN_WIDTH),
                            row(children=[type_widgetbox, radios_widgetbox])])
 
-main_left = column(children=[map_figure], width=LEFT_COLUMN_WIDTH, 
+main_left = column(children=[map_head, map_figure], width=LEFT_COLUMN_WIDTH, 
                    height=COLUMN_HEIGHT)
-main_right = column(children=[ts_figure, widgets], 
+main_right = column(children=[ts_head, ts_figure, widgets], 
                     width=RIGHT_COLUMN_WIDTH, height=COLUMN_HEIGHT)
 root = layout([[main_left, main_right]])
 curdoc().add_root(root)

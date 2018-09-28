@@ -1,0 +1,74 @@
+/*@font-face {
+    font-family: 'Frutiger';
+    font-style: normal;
+    font-weight: normal;
+    src: local('Frutiger'), url('./static/css/fonts/Frutiger.woff') format('woff');
+}*/
+
+@import url('https://fonts.googleapis.com/css?family=Roboto:500|Work+Sans');
+
+/*
+font-family: 'Work Sans', sans-serif;
+font-family: 'Roboto', sans-serif;
+*/
+
+
+
+p {
+    font-family: 'Roboto', sans-serif;
+    font-size: 11pt;
+}
+
+.bk-root {
+    font-family: 'Roboto', sans-serif;
+    font-size: 11pt;
+}
+
+.bk-root .bk-widget {
+    h2 {
+        font-size: 18pt;
+        font-family: 'Work Sans', sans-serif;
+        font-weight: bold;
+        margin-bottom: 10pt;
+    }
+    label {
+        margin-bottom: 5pt !important;
+    }
+    .filter-head {
+        font-size: 10pt;
+        color: #d0021b;
+    }
+}
+
+.bk-root .bk-widget 
+
+.bk-root .bk-widget .bk-layout-fixed .plot-head {
+    font-family: 'Work Sans', sans-serif;
+    font-weight: bold;
+    font-size: 14pt;
+    margin: 10pt 10pt 5pt 10pt;
+}
+
+.header {
+    display: block;
+    height: 60px;
+    width: 100%;
+}
+
+.logo {
+    float: left;
+    display: inline-block;
+}
+
+h1 {
+    display: inline-block;
+    font-family: 'Work Sans', sans-serif;
+    font-weight: bold;
+    font-size: 26pt;
+    color: #d0021b;
+    margin: 4pt !important;
+}
+
+#title {
+    margin-left: 200px;
+}

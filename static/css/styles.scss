@@ -1,0 +1,57 @@
+/*@font-face {
+    font-family: 'Frutiger';
+    font-style: normal;
+    font-weight: normal;
+    src: local('Frutiger'), url('./static/css/fonts/Frutiger.woff') format('woff');
+}*/
+
+@import url('https://fonts.googleapis.com/css?family=Roboto:500|Work+Sans');
+
+/*
+font-family: 'Work Sans', sans-serif;
+font-family: 'Roboto', sans-serif;
+*/
+
+
+
+.p {
+    font-family: 'Roboto', sans-serif;
+    font-weight: regular;
+    font-size: 11pt;
+}
+
+.bk-root {
+    font-family: 'Roboto', sans-serif !important;
+    font-weight: regular !important;
+    font-size: 11pt !important;
+
+    .filter_head {
+        font-family: 'Work Sans', sans-serif;
+        font-weight: bold;
+        font-size: 12pt;
+    }
+}
+
+
+
+.header {
+    display: block;
+    height: 60px;
+    width: 100%;
+    text-align: center;
+}
+
+.logo {
+    float: left;
+    display: inline-block;
+}
+
+.h1 {
+    display: inline-block;
+    font-family: 'Work Sans', sans-serif;
+    font-weight: bold;
+    font-size: 26pt;
+    color: #d0021b;
+    margin: 4pt !important;
+}
+

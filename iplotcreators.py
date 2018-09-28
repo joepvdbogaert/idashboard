@@ -40,10 +40,10 @@ def _create_choropleth_map(source, width=600, height=1000):
         maps_api_key = f.readline()
 
     map_options = GMapOptions(lat=52.35, lng=4.9, map_type="roadmap", zoom=11)
-    p = gmap(maps_api_key, map_options, title="Amsterdam-Amstelland",
-             tools=map_tools, plot_width=width, plot_height=height,
-             x_axis_location=None, y_axis_location=None)
-
+    p = gmap(maps_api_key, map_options,tools=map_tools, plot_width=width,
+             plot_height=height, x_axis_location=None, y_axis_location=None)
+    p.xaxis.visible=False
+    p.yaxis.visible=False
     # p = figure(title="Spatial distribution of incidents in Amsterdam-Amstelland",
     #            tools=map_tools, x_axis_location=None, y_axis_location=None,
     #            height=height, width=width, tooltips=tooltip_info)
@@ -103,8 +103,7 @@ def _create_time_series(dfincident, agg_by, pattern, group_by,
 
     # create plot
     timeseries_tools = "pan,wheel_zoom,reset,xbox_select,hover,save"
-    p = figure(title="Time series of incident rate",
-               tools=timeseries_tools, width=width, height=height,
+    p = figure(tools=timeseries_tools, width=width, height=height,
                x_range=FactorRange(*x))
 
     glyph = p.multi_line(xs="xs", ys="ys", legend="label", line_color="cs", 
